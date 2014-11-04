@@ -8,39 +8,42 @@
 (def clients (atom #{}))
 
 (defn server-handle-client [req]
-  (println "~Using req to connect~")
+  (println "~Starting new connection with request~")
   (let [deferred-strm (http/websocket-connection req)]
-    (d/on-realized deferred-strm                                      ;once we have the connection
-                   (fn [strm]                                         ;strm = this client's stream
+    (d/on-realized deferred-strm                                         ;once we have the connection
+                   (fn [strm]                                            ;strm = this client's stream
                      (println "!Connected!")
-                     (swap! clients conj strm)                        ;put connection in set
-                     (s/consume (fn [msg]                             ;consume every message from a client, and send to all other clients
-                                  (doseq [c-strm @clients]            ;for each client stream
-                                    (when (not= c-strm strm)          ;if it's not the active client's stream
-                                      (println "sent " msg " to " c-strm)
+                     (swap! clients conj strm)                           ;put connection in set
+                     (s/consume (fn [msg]                                ;consume every message from a client, and send to all other clients
+                                  (doseq [c-strm @clients]               ;for each client stream
+                                    (when (not= c-strm strm)             ;if it's not the active client's stream
+                                      (println "sent: " msg " to " c-strm)
                                       (s/put! c-strm msg))))
-                                strm))                                ;client stream is closed over
+                                strm))                                   ;client stream is closed over
                    (fn [error] (println "error connecting to client: " error)))))
 
-(defn- validate-input[input]
-  (if (or (nil? input) (= ":close" input))
-    nil
-    input))
+(defn- non-blocking-read-line [reader]
+  (loop [input (vector)]
+    (if (= (last input) \newline)
+      (apply str input)
+      (if (.ready reader)
+        (recur (conj input (char (.read reader))))
+        (recur input)))))
 
 (defn start-client []
   (let [deferred-strm (http/websocket-client "ws://localhost:9099")]
     (println "~Waiting for connection~")
-    (d/on-realized deferred-strm                                      ;once we have a connection
+    (d/on-realized deferred-strm                                           ;once we have a connection
                    (fn [c-strm]
                      (println "!Connected!")
-                     (s/consume (fn [msg]                             ;consume all msg from server
-                                  (println msg))                      ;may have to sync
-                                c-strm)
-                     (loop []
-                       (prn ">")
-                       (when-let [res (validate-input (read-line))]
-                         (s/put! c-strm res)
-                         (recur))))
+                     (s/consume println c-strm)                            ;consume and print all msg from server
+                     (with-open [rdr (clojure.java.io/reader *in*)]        ;writting non-blocking, so should be fine?
+                       (loop []                                            ;loop and block waiting for user input
+                         (print ">") (flush)                                                 ;print wont work unless flushed?
+                         (when-let [res (not-empty @(future (non-blocking-read-line rdr)))]  ;this way the console isn't blocked, but we still block waiting for the value
+                           (s/put! c-strm res)
+                           ;(recur)
+                           ))))
                    (fn [error] (println "error connecting to server: " error)))))
 
 (defn -main
