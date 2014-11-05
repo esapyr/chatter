@@ -1,6 +1,6 @@
 (ns chatter.core
   (:gen-class)
-  (:require [clojure.core.async :refer [chan alts! <! >!]]
+  (:require [clojure.core.async :refer [go chan alts! >!]]
             [manifold.deferred :as d]
             [manifold.stream :as s]
             [aleph.http :as http]))
@@ -22,28 +22,35 @@
                                 strm))                                   ;client stream is closed over
                    (fn [error] (println "error connecting to client: " error)))))
 
-(defn- non-blocking-read-line [reader]
+#_(defn- non-blocking-read-line [reader]
+  (print "out of loop:" (.ready reader))
   (loop [input (vector)]
     (if (= (last input) \newline)
+      (print "in loop: " (.ready reader))
       (apply str input)
       (if (.ready reader)
         (recur (conj input (char (.read reader))))
         (recur input)))))
 
+(defn- request-user-input []
+  (print ">")
+  (flush)
+  @(d/timeout! (d/future (read-line)) 5000 nil))
+
 (defn start-client []
-  (let [deferred-strm (http/websocket-client "ws://localhost:9099")]
+  (let [deferred-strm        (http/websocket-client "ws://localhost:9099")
+        server-ch            (chan)
+        user-ch              (chan)]
     (println "~Waiting for connection~")
     (d/on-realized deferred-strm                                           ;once we have a connection
-                   (fn [c-strm]
+                   (fn [server-strm]
                      (println "!Connected!")
-                     (s/consume println c-strm)                            ;consume and print all msg from server
-                     (with-open [rdr (clojure.java.io/reader *in*)]        ;writting non-blocking, so should be fine?
-                       (loop []                                            ;loop and block waiting for user input
-                         (print ">") (flush)                                                 ;print wont work unless flushed?
-                         (when-let [res (not-empty @(future (non-blocking-read-line rdr)))]  ;this way the console isn't blocked, but we still block waiting for the value
-                           (s/put! c-strm res)
-                           ;(recur)
-                           ))))
+                     (s/consume #(go (>! server-ch %)) server-strm)                     ;consume all server input
+                     (go (>! user-ch (s/periodically 1000 request-user-input)))              ;ask for user input every second (wait for 5 for input)
+                     (go (let [[value ch] (alts! [user-ch server-ch] :priority true)]
+                           (condp = ch
+                             server-ch (println value)
+                             user-ch   (s/put! server-strm value)))))
                    (fn [error] (println "error connecting to server: " error)))))
 
 (defn -main
