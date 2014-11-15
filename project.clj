@@ -5,7 +5,8 @@
             :url "http://www.eclipse.org/legal/epl-v10.html"}
   :dependencies [[org.clojure/clojure "1.6.0"]
                  [org.clojure/core.async "0.1.346.0-17112a-alpha"]
-                 [aleph "0.4.0-alpha7"]]
+                 [aleph "0.4.0-alpha7"]
+                 [seesaw "1.4.4"]]
   :main ^:skip-aot chatter.core
   :target-path "target/%s"
   :profiles {:uberjar {:aot :all}})
